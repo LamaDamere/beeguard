@@ -54,8 +54,11 @@ Future<void> _seedDemoData() async {
         'humidity': 61.8,
         'weight': 24.3,
         'water_level': 70,
+        'water_height_cm': 2.4,
         'sound_result': 'Normal',
+        'sound_confidence': 94,
         'health_score': 87,
+        'door_open': false,
         'last_sync': '13:00:00',
       },
       'ai_status': {
@@ -64,13 +67,22 @@ Future<void> _seedDemoData() async {
         'last_analysis': 'Today at 13:00',
         'model_version': 'TinyML v1.0',
       },
+      // Command contract shared with the ESP32 main controller.
+      // App WRITES: collect_honey, feed_ml, entrance.
+      // ESP echoes back: smoke_pump, pump (for live status display).
       'commands': {
+        'collect_honey': false,
         'smoke_pump': false,
         'pump': false,
-        'pump_mode': 'water',
-        'buzzer': false,
+        'feed_ml': 0,
         'entrance': 'open',
-        'emergency_lock': false,
+      },
+      // RFID-driven hive lock. ESP owns these; the app only reads them.
+      'security': {
+        'locked': true,
+        'rfid_status': 'Waiting for Card',
+        'last_card': '',
+        'last_time': '',
       },
       'hornet_detection': {
         'detected': false,
@@ -82,6 +94,9 @@ Future<void> _seedDemoData() async {
         'today_weight': 24.3,
         'yesterday_weight': 23.8,
         'estimated_honey': 0.5,
+        'today_production': 0.5,
+        'weekly_production': 3.5,
+        'monthly_production': 15.0,
       },
       'settings': {
         'temp_max': 36,

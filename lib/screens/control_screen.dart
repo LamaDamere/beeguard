@@ -22,6 +22,11 @@ class _ControlScreenState extends State<ControlScreen> {
   double waterHeight = 0;
   bool _loading = true;
   bool _feeding = false;
+  int _feedingMl = 0;
+
+  // Volume -> pump run time. 50 ml ≈ 6 s (measured); 100 ml ≈ 12 s (linear).
+  // The ESP performs the real timing; this only drives the UI spinner.
+  static const Map<int, int> _feedSeconds = {50: 6, 100: 12};
 
   @override
   void initState() {
@@ -56,13 +61,23 @@ class _ControlScreenState extends State<ControlScreen> {
     super.dispose();
   }
 
-  Future<void> _feedBees() async {
+  // Dispense a fixed volume. We only write the requested amount; the ESP runs
+  // the pump for the mapped time and resets commands/feed_ml back to 0 itself.
+  Future<void> _feed(int ml) async {
     if (_feeding) return;
-    setState(() => _feeding = true);
-    await FirebaseDatabase.instance.ref('commands/pump').set(true);
-    await Future<void>.delayed(const Duration(seconds: 5));
-    await FirebaseDatabase.instance.ref('commands/pump').set(false);
-    if (mounted) setState(() => _feeding = false);
+    setState(() {
+      _feeding = true;
+      _feedingMl = ml;
+    });
+    await FirebaseDatabase.instance.ref('commands/feed_ml').set(ml);
+    final seconds = _feedSeconds[ml] ?? 6;
+    await Future<void>.delayed(Duration(seconds: seconds));
+    if (mounted) {
+      setState(() {
+        _feeding = false;
+        _feedingMl = 0;
+      });
+    }
   }
 
   @override
@@ -164,30 +179,46 @@ class _ControlScreenState extends State<ControlScreen> {
                   ? AppColors.secondary
                   : AppColors.textSecondary,
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 56,
-              child: ElevatedButton.icon(
-                onPressed: _feeding ? null : _feedBees,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.textPrimary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+            const SizedBox(height: 20),
+            const Text(
+              'Feed Bees',
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Choose how much solution to dispense',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _FeedButton(
+                    ml: 50,
+                    seconds: _feedSeconds[50] ?? 6,
+                    busy: _feeding,
+                    isActive: _feeding && _feedingMl == 50,
+                    onTap: () => _feed(50),
                   ),
                 ),
-                icon: _feeding
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.play_arrow_rounded),
-                label: Text(_feeding ? 'Feeding for 5 Seconds' : 'Feed Bees'),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _FeedButton(
+                    ml: 100,
+                    seconds: _feedSeconds[100] ?? 12,
+                    busy: _feeding,
+                    isActive: _feeding && _feedingMl == 100,
+                    onTap: () => _feed(100),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             if (critical)
@@ -218,6 +249,79 @@ class _ControlScreenState extends State<ControlScreen> {
   double _readDouble(Object? value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+}
+
+class _FeedButton extends StatelessWidget {
+  const _FeedButton({
+    required this.ml,
+    required this.seconds,
+    required this.busy,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  final int ml;
+  final int seconds;
+  final bool busy; // any feed currently running
+  final bool isActive; // this specific volume is the one running
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 66,
+      child: ElevatedButton(
+        onPressed: busy ? null : onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.textPrimary,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: AppColors.textPrimary.withValues(alpha: 0.4),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        child: isActive
+            ? const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(width: 10),
+                  Text(
+                    'Feeding...',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ],
+              )
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'Feed $ml ml',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '~$seconds s',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 }
 

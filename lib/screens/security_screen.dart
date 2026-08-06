@@ -19,7 +19,8 @@ class _SecurityScreenState extends State<SecurityScreen> {
   StreamSubscription<DatabaseEvent>? _lockSubscription;
 
   List<_RfidLog> logs = const [];
-  bool hiveLocked = false;
+  bool hiveLocked = true;
+  String rfidStatus = 'Waiting for Card';
 
   @override
   void initState() {
@@ -45,12 +46,17 @@ class _SecurityScreenState extends State<SecurityScreen> {
           setState(() => logs = nextLogs.reversed.take(5).toList());
         });
 
+    // Hive lock + RFID status are owned by the ESP under /security.
     _lockSubscription = FirebaseDatabase.instance
-        .ref('commands/emergency_lock')
+        .ref('security')
         .onValue
         .listen((event) {
+          final data = _asMap(event.snapshot.value);
           if (!mounted) return;
-          setState(() => hiveLocked = event.snapshot.value == true);
+          setState(() {
+            hiveLocked = data['locked'] == true;
+            rfidStatus = data['rfid_status']?.toString() ?? rfidStatus;
+          });
         });
   }
 
@@ -63,11 +69,13 @@ class _SecurityScreenState extends State<SecurityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final latestStatus = logs.isEmpty
-        ? 'Waiting for Card'
-        : logs.first.status == 'granted'
+    final latestStatus = rfidStatus == 'granted'
         ? 'Access Granted'
-        : 'Access Denied';
+        : rfidStatus == 'denied'
+        ? 'Access Denied'
+        : (logs.isNotEmpty && logs.first.status == 'granted')
+        ? 'Access Granted'
+        : 'Waiting for Card';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Security')),
@@ -129,7 +137,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                   SizedBox(width: 14),
                   Expanded(
                     child: Text(
-                      'The hive lock opens only after a valid RFID card is scanned.',
+                      'Scan an RFID card to unlock the hive. Scan again to lock it.',
                       style: TextStyle(
                         color: AppColors.textPrimary,
                         fontSize: 15,

@@ -19,10 +19,11 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
 
   double currentHoneyWeight = 0;
   bool smokePumpRunning = false;
-  bool doorLocked = true;
+  bool doorOpen = false;
   bool _loading = true;
   bool _collecting = false;
   int _step = 0;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -35,6 +36,8 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
           if (!mounted) return;
           setState(() {
             currentHoneyWeight = _readDouble(data['weight']);
+            // The ESP echoes the physical door position here.
+            doorOpen = data['door_open'] == true;
             _loading = false;
           });
         });
@@ -46,7 +49,6 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
           if (!mounted) return;
           setState(() {
             smokePumpRunning = data['smoke_pump'] == true;
-            doorLocked = data['emergency_lock'] == true;
           });
         });
   }
@@ -58,25 +60,40 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
     super.dispose();
   }
 
+  // Start collection: open the door and run the smoke pump.
+  // The door is intentionally LEFT OPEN — there is no automatic closing step.
+  // The ESP handles the physical sequence (open door -> 4s smoke -> smoke off).
   Future<void> _collectHoney() async {
-    if (_collecting) return;
+    if (_busy || doorOpen) return;
     setState(() {
+      _busy = true;
       _collecting = true;
       _step = 0;
     });
 
-    final commands = FirebaseDatabase.instance.ref('commands');
-    await commands.child('emergency_lock').set(false);
-    await Future<void>.delayed(const Duration(seconds: 1));
-    if (mounted) setState(() => _step = 1);
-    await commands.child('smoke_pump').set(true);
+    await FirebaseDatabase.instance.ref('commands/collect_honey').set(true);
+
+    // Local timeline just mirrors the ESP sequence for visual feedback.
     await Future<void>.delayed(const Duration(seconds: 2));
-    if (mounted) setState(() => _step = 2);
-    await commands.child('smoke_pump').set(false);
-    await commands.child('emergency_lock').set(true);
-    await Future<void>.delayed(const Duration(seconds: 1));
+    if (mounted) setState(() => _step = 1); // smoke running
+    await Future<void>.delayed(const Duration(seconds: 4));
     if (mounted) {
       setState(() {
+        _collecting = false;
+        _busy = false;
+      });
+    }
+  }
+
+  // Manual close (the automatic closing step was removed by request).
+  Future<void> _closeDoor() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    await FirebaseDatabase.instance.ref('commands/collect_honey').set(false);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (mounted) {
+      setState(() {
+        _busy = false;
         _collecting = false;
         _step = 0;
       });
@@ -110,18 +127,16 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
             ),
             const SizedBox(height: 18),
             _StatusCard(
-              icon: doorLocked
-                  ? Icons.door_front_door_rounded
-                  : Icons.door_sliding_rounded,
+              icon: doorOpen
+                  ? Icons.door_sliding_rounded
+                  : Icons.door_front_door_rounded,
               title: 'Door Status',
-              value: _collecting
-                  ? (_step == 0
-                        ? 'Opening'
-                        : _step == 2
-                        ? 'Closing'
-                        : 'Open')
-                  : (doorLocked ? 'Closed' : 'Open'),
-              color: doorLocked ? AppColors.textSecondary : AppColors.secondary,
+              value: _busy && !doorOpen
+                  ? 'Opening'
+                  : _busy && doorOpen
+                  ? 'Closing'
+                  : (doorOpen ? 'Open' : 'Closed'),
+              color: doorOpen ? AppColors.secondary : AppColors.textSecondary,
             ),
             const SizedBox(height: 14),
             _StatusCard(
@@ -138,20 +153,14 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
                 children: [
                   _ProcessStep(
                     active: _collecting && _step == 0,
-                    done: _collecting && _step > 0,
+                    done: doorOpen || (_collecting && _step > 0),
                     title: 'Opening Door',
                   ),
                   const _ProcessDivider(),
                   _ProcessStep(
                     active: _collecting && _step == 1,
-                    done: _collecting && _step > 1,
-                    title: 'Smoke Pump Running',
-                  ),
-                  const _ProcessDivider(),
-                  _ProcessStep(
-                    active: _collecting && _step == 2,
                     done: false,
-                    title: 'Closing Door',
+                    title: 'Smoke Pump Running (4s)',
                   ),
                 ],
               ),
@@ -159,27 +168,54 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
             const SizedBox(height: 18),
             SizedBox(
               height: 56,
-              child: ElevatedButton.icon(
-                onPressed: _collecting ? null : _collectHoney,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.textPrimary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                icon: _collecting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+              // Toggle button: opens for collection, or closes the door manually.
+              // There is no automatic closing step anymore — the door stays open
+              // after collection until the farmer taps "Close Door".
+              child: doorOpen
+                  ? ElevatedButton.icon(
+                      onPressed: _busy ? null : _closeDoor,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF8D6E63),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
                         ),
-                      )
-                    : const Icon(Icons.inventory_2_rounded),
-                label: Text(_collecting ? 'Collecting Honey' : 'Collect Honey'),
-              ),
+                      ),
+                      icon: _busy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.door_front_door_rounded),
+                      label: Text(_busy ? 'Closing Door' : 'Close Door'),
+                    )
+                  : ElevatedButton.icon(
+                      onPressed: _busy ? null : _collectHoney,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.textPrimary,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      icon: _collecting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.inventory_2_rounded),
+                      label: Text(
+                        _collecting ? 'Collecting Honey' : 'Collect Honey',
+                      ),
+                    ),
             ),
             const SizedBox(height: 18),
             BeeGuardCard(

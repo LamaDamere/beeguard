@@ -23,7 +23,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double humidity = 0;
   double feedingLevel = 0;
   int healthScore = 0;
-  bool hiveLocked = false;
+  bool hiveLocked = true;
   bool _loading = true;
 
   @override
@@ -44,13 +44,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         });
     _commandsSubscription = FirebaseDatabase.instance
-        .ref('commands')
+        .ref('security')
         .onValue
         .listen((event) {
           final data = _asMap(event.snapshot.value);
           if (!mounted) return;
           setState(() {
-            hiveLocked = data['emergency_lock'] == true;
+            hiveLocked = data['locked'] == true;
           });
         });
   }
