@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # beeguard
 
 A new Flutter project.
@@ -15,3 +16,6 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+=======
+# beeguard
+>>>>>>> e5dc9b5110f0cf2f135079b9dd24e5c809757dc5
