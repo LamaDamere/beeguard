@@ -44,8 +44,13 @@ class _AiStatusScreenState extends State<AiStatusScreen> {
           });
         });
 
+    // The audio board now classifies automatically every 15 minutes, so
+    // ai_history gains ~96 entries a day. Reading the whole node would mean
+    // re-downloading a growing archive on every change just to show three
+    // rows; limitToLast keeps it to the newest handful.
     _historySubscription = FirebaseDatabase.instance
         .ref('ai_history')
+        .limitToLast(10)
         .onValue
         .listen((event) {
           final data = _asMap(event.snapshot.value);
@@ -271,14 +276,10 @@ class _HistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rows = history.isEmpty
-        ? const [
-            _HistoryEntry(time: '13:00', result: 'Normal', confidence: 94),
-            _HistoryEntry(time: '12:30', result: 'Normal', confidence: 91),
-            _HistoryEntry(time: '12:15', result: 'Swarming', confidence: 78),
-          ]
-        : history;
-
+    // No placeholder rows here. This card used to fall back to three
+    // hard-coded results (13:00 Normal 94%, ...) whenever history was empty,
+    // which is indistinguishable from real analysis output — a hive whose
+    // audio board was offline looked like one reporting a healthy colony.
     return BeeGuardCard(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -293,10 +294,25 @@ class _HistoryCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          for (var i = 0; i < rows.length; i++) ...[
-            _HistoryRow(entry: rows[i]),
-            if (i < rows.length - 1) const Divider(height: 22),
-          ],
+          if (history.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                'No analysis recorded yet. The hive analyses its sound '
+                'automatically every 15 minutes.',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13.5,
+                  height: 1.4,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )
+          else
+            for (var i = 0; i < history.length; i++) ...[
+              _HistoryRow(entry: history[i]),
+              if (i < history.length - 1) const Divider(height: 22),
+            ],
         ],
       ),
     );

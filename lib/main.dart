@@ -21,25 +21,32 @@ import 'utils/app_routes.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  _seedDemoData();
+  await _initializeFirebase();
   runApp(const BeeGuardApp());
 }
+
 Future<void> _initializeFirebase() async {
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-    await _seedDemoData();
+    await _seedInitialData();
   } catch (error, stackTrace) {
+    // The app is still usable offline (screens show their empty states), so a
+    // Firebase problem should surface in the log rather than kill startup.
     debugPrint('Firebase startup skipped: $error');
     debugPrintStack(stackTrace: stackTrace);
   }
 }
 
-Future<void> _seedDemoData() async {
+/// Writes the node skeleton on a brand-new database so screens have something
+/// to bind to before the ESP32 first reports.
+///
+/// This is structure, not fake readings: seeding a plausible temperature would
+/// show a hive that is not connected as a healthy one. Everything the hardware
+/// measures starts empty and is filled in by the controller. Runs only when
+/// /hive_status is absent, so it never overwrites live data.
+Future<void> _seedInitialData() async {
   try {
     final database = FirebaseDatabase.instance.ref();
     final hiveStatusSnapshot = await database.child('hive_status').get();
@@ -50,25 +57,33 @@ Future<void> _seedDemoData() async {
 
     await database.update({
       'hive_status': {
-        'temperature': 34.2,
-        'humidity': 61.8,
-        'weight': 24.3,
-        'water_level': 70,
-        'water_height_cm': 2.4,
-        'sound_result': 'Normal',
-        'sound_confidence': 94,
-        'health_score': 87,
+        'temperature': 0,
+        'humidity': 0,
+        'weight': 0,
+        'water_level': 0,
+        'water_height_cm': 0,
+        'water_remaining_ml': 0,
+        'water_sensor_ok': true,
+        'sound_result': 'Unknown',
+        'sound_confidence': 0,
+        'health_score': 0,
         'door_open': false,
-        'last_sync': '13:00:00',
+        'locked': true,
+        'entrance_status': 'open',
+        'audio_node_online': false,
+        'camera_node_online': false,
+        'last_sync': 'Waiting for hive',
+        'last_sync_epoch': 0,
       },
       'ai_status': {
-        'sound_result': 'Normal',
-        'confidence': 94,
-        'last_analysis': 'Today at 13:00',
-        'model_version': 'TinyML v1.0',
+        'sound_result': 'Unknown',
+        'confidence': 0,
+        'last_analysis': 'No analysis yet',
+        'model_version': 'Edge Impulse v1.0',
+        'node_online': false,
       },
       // Command contract shared with the ESP32 main controller.
-      // App WRITES: collect_honey, feed_ml, entrance.
+      // App WRITES: collect_honey, feed_ml, entrance, tare_scale, set_baseline.
       // ESP echoes back: smoke_pump, pump (for live status display).
       'commands': {
         'collect_honey': false,
@@ -76,6 +91,8 @@ Future<void> _seedDemoData() async {
         'pump': false,
         'feed_ml': 0,
         'entrance': 'open',
+        'tare_scale': false,
+        'set_baseline': false,
       },
       // RFID-driven hive lock. ESP owns these; the app only reads them.
       'security': {
@@ -88,25 +105,53 @@ Future<void> _seedDemoData() async {
         'detected': false,
         'entrance_status': 'open',
         'last_detection': 'No detection yet',
+        'last_detection_epoch': 0,
+        'last_confirmed': false,
+        'detection_count': 0,
+        'camera_online': false,
         'image_url': '',
       },
+      // Where the app finds the ESP32-CAM. The controller republishes this at
+      // boot, so changing the camera's address does not need an app rebuild.
+      'camera': {
+        'stream_url': 'http://192.168.137.150:81/stream',
+        'status_url': 'http://192.168.137.150/status',
+        'online': false,
+        'last_seen': '',
+      },
       'production': {
-        'today_weight': 24.3,
-        'yesterday_weight': 23.8,
-        'estimated_honey': 0.5,
-        'today_production': 0.5,
-        'weekly_production': 3.5,
-        'monthly_production': 15.0,
+        'hive_weight': 0,
+        'baseline_weight': 0,
+        'estimated_honey': 0,
+        'today_production': 0,
+        'today_start_weight': 0,
+        'today_date': '',
+        'weekly_production': 0,
+        'monthly_production': 0,
+        'total_harvested': 0,
+        'last_harvest_kg': 0,
+        'last_harvest_time': '',
+      },
+      // Physical measurements the controller reads back at boot. Editing these
+      // re-calibrates the hive without reflashing.
+      'calibration': {
+        'scale_factor': -7050.0,
+        'tare_offset': 0,
+        'container_height_cm': 3.5,
+        'sensor_to_top_cm': 4.0,
+        'container_diameter_cm': 9.0,
+        'honey_fraction': 0.85,
       },
       'settings': {
         'temp_max': 36,
         'temp_min': 32,
-        'humidity_max': 70,
+        'humidity_max': 75,
+        'humidity_min': 40,
         'notifications_enabled': true,
       },
     });
   } catch (error, stackTrace) {
-    debugPrint('Demo data seed skipped: $error');
+    debugPrint('Initial data seed skipped: $error');
     debugPrintStack(stackTrace: stackTrace);
   }
 }

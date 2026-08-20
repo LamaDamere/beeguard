@@ -4,6 +4,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../utils/db_read.dart';
 import '../widgets/beeguard_card.dart';
 
 class HiveDetailsScreen extends StatefulWidget {
@@ -16,8 +17,14 @@ class HiveDetailsScreen extends StatefulWidget {
 class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
   StreamSubscription<DatabaseEvent>? _hiveSubscription;
   StreamSubscription<DatabaseEvent>? _commandsSubscription;
+  StreamSubscription<DatabaseEvent>? _productionSubscription;
 
-  double currentHoneyWeight = 0;
+  double hiveWeight = 0;
+  double estimatedHoney = 0;
+  double baselineWeight = 0;
+  double todayProduction = 0;
+  double lastHarvestKg = 0;
+  String lastHarvestTime = '';
   bool smokePumpRunning = false;
   bool doorOpen = false;
   bool _loading = true;
@@ -32,12 +39,12 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
         .ref('hive_status')
         .onValue
         .listen((event) {
-          final data = _asMap(event.snapshot.value);
+          final data = asMap(event.snapshot.value);
           if (!mounted) return;
           setState(() {
-            currentHoneyWeight = _readDouble(data['weight']);
+            hiveWeight = readDouble(data['weight']);
             // The ESP echoes the physical door position here.
-            doorOpen = data['door_open'] == true;
+            doorOpen = readBool(data['door_open']);
             _loading = false;
           });
         });
@@ -45,10 +52,27 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
         .ref('commands')
         .onValue
         .listen((event) {
-          final data = _asMap(event.snapshot.value);
+          final data = asMap(event.snapshot.value);
           if (!mounted) return;
           setState(() {
-            smokePumpRunning = data['smoke_pump'] == true;
+            smokePumpRunning = readBool(data['smoke_pump']);
+          });
+        });
+    _productionSubscription = FirebaseDatabase.instance
+        .ref('production')
+        .onValue
+        .listen((event) {
+          final data = asMap(event.snapshot.value);
+          if (!mounted) return;
+          setState(() {
+            baselineWeight = readDouble(data['baseline_weight']);
+            todayProduction = readDouble(data['today_production']);
+            lastHarvestKg = readDouble(data['last_harvest_kg']);
+            lastHarvestTime = readString(data['last_harvest_time'], '');
+            // Prefer the ESP's figure. It applies the honey fraction from
+            // /calibration, so recalculating here would drift from the value
+            // shown everywhere else the moment that fraction is tuned.
+            estimatedHoney = readDouble(data['estimated_honey']);
           });
         });
   }
@@ -57,7 +81,42 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
   void dispose() {
     _hiveSubscription?.cancel();
     _commandsSubscription?.cancel();
+    _productionSubscription?.cancel();
     super.dispose();
+  }
+
+  // Tell the ESP to treat the current weight as "no harvestable honey".
+  // Without a baseline the estimate is meaningless — it would report the
+  // weight of the boxes, frames and bees as honey.
+  Future<void> _setBaseline() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Set honey baseline?'),
+        content: Text(
+          'The hive currently weighs ${hiveWeight.toStringAsFixed(1)} kg.\n\n'
+          'Everything above this weight from now on will be counted as '
+          'harvestable honey. Do this when the hive has no honey to collect.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Set Baseline'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await FirebaseDatabase.instance.ref('commands/set_baseline').set(true);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Baseline will update on the next reading')),
+    );
   }
 
   // Start collection: open the door and run the smoke pump.
@@ -218,50 +277,233 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
                     ),
             ),
             const SizedBox(height: 18),
-            BeeGuardCard(
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.scale_rounded,
-                    color: Color(0xFF8D6E63),
-                    size: 30,
-                  ),
-                  const SizedBox(width: 14),
-                  const Expanded(
-                    child: Text(
-                      'Current Honey Weight',
-                      style: TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
+
+            // This card used to read "Current Honey Weight" but showed
+            // hive_status/weight — the whole hive on the load cell: boxes,
+            // frames, brood and bees included. On a healthy colony that is
+            // 20-plus kg, none of which can be collected. The headline figure
+            // is now the estimate of what is actually harvestable, with the
+            // raw scale reading kept underneath as supporting detail.
+            _HoneyEstimateCard(
+              estimatedHoney: estimatedHoney,
+              hiveWeight: hiveWeight,
+              baselineWeight: baselineWeight,
+              todayProduction: todayProduction,
+              onSetBaseline: _setBaseline,
+            ),
+
+            if (lastHarvestKg > 0) ...[
+              const SizedBox(height: 14),
+              BeeGuardCard(
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.inventory_2_rounded,
+                      color: Color(0xFF8D6E63),
+                      size: 26,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Last harvest: ${lastHarvestKg.toStringAsFixed(2)} kg',
+                            style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          if (lastHarvestTime.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              lastHarvestTime,
+                              style: const TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                  ),
-                  Text(
-                    '${currentHoneyWeight.toStringAsFixed(1)} kg',
-                    style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
   }
+}
 
-  Map<dynamic, dynamic> _asMap(Object? value) {
-    if (value is Map) return value;
-    return {};
+class _HoneyEstimateCard extends StatelessWidget {
+  const _HoneyEstimateCard({
+    required this.estimatedHoney,
+    required this.hiveWeight,
+    required this.baselineWeight,
+    required this.todayProduction,
+    required this.onSetBaseline,
+  });
+
+  final double estimatedHoney;
+  final double hiveWeight;
+  final double baselineWeight;
+  final double todayProduction;
+  final VoidCallback onSetBaseline;
+
+  @override
+  Widget build(BuildContext context) {
+    // With no baseline the estimate would be the full hive weight, which is
+    // badly wrong rather than merely imprecise — so prompt instead of showing
+    // a confident-looking number.
+    final needsBaseline = baselineWeight <= 0;
+
+    return BeeGuardCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFC928).withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.hive_rounded,
+                  color: Color(0xFF8D6E63),
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Estimated Honey Ready',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      needsBaseline
+                          ? '--'
+                          : '${estimatedHoney.toStringAsFixed(2)} kg',
+                      style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 30,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(height: 1),
+          const SizedBox(height: 14),
+          _DetailRow(
+            label: 'Hive weight on the scale',
+            value: '${hiveWeight.toStringAsFixed(1)} kg',
+          ),
+          const SizedBox(height: 9),
+          _DetailRow(
+            label: 'Baseline (empty of honey)',
+            value: needsBaseline
+                ? 'not set'
+                : '${baselineWeight.toStringAsFixed(1)} kg',
+          ),
+          const SizedBox(height: 9),
+          _DetailRow(
+            label: 'Gained today',
+            value: '${todayProduction >= 0 ? '+' : ''}'
+                '${todayProduction.toStringAsFixed(2)} kg',
+            highlight: todayProduction > 0,
+          ),
+          if (needsBaseline) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF6F00).withValues(alpha: 0.09),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Text(
+                'Set a baseline so the estimate counts only new stores, not '
+                'the weight of the hive itself.',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12.5,
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onSetBaseline,
+              icon: const Icon(Icons.straighten_rounded, size: 18),
+              label: Text(
+                needsBaseline ? 'Set baseline now' : 'Reset baseline',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
+}
 
-  double _readDouble(Object? value) {
-    if (value is num) return value.toDouble();
-    return double.tryParse(value?.toString() ?? '') ?? 0;
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.highlight = false,
+  });
+
+  final String label;
+  final String value;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            color: highlight ? AppColors.secondary : AppColors.textPrimary,
+            fontSize: 14.5,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
   }
 }
 

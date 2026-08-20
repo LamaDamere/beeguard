@@ -49,6 +49,21 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- The ESP32-CAM stream is plain HTTP on the local network. App Transport
+	     Security blocks that by default. NSAllowsLocalNetworking lifts the
+	     restriction for local addresses only, leaving ATS fully enforced for
+	     everything on the internet — unlike NSAllowsArbitraryLoads, which
+	     would switch it off everywhere. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- iOS 14+ shows a one-time permission prompt the first time the app
+	     contacts a device on the LAN. Without this string the prompt cannot be
+	     displayed and the connection is refused outright. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>BeeGuard connects to the hive camera on your local network to show the live entrance video.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

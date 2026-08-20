@@ -4,6 +4,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../utils/db_read.dart';
 import '../widgets/beeguard_card.dart';
 
 class LiveMonitoringScreen extends StatefulWidget {
@@ -15,39 +16,57 @@ class LiveMonitoringScreen extends StatefulWidget {
 
 class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
   StreamSubscription<DatabaseEvent>? _subscription;
+  Timer? _tick;
 
   bool _loading = true;
   double temperature = 0;
   double humidity = 0;
-  double honeyWeight = 0;
+  double hiveWeight = 0;
   double waterLevel = 0;
+  double waterMl = 0;
   String soundResult = 'Unknown';
+  int soundConfidence = 0;
   String lastSync = 'Waiting for data';
+  int lastSyncEpoch = 0;
+  bool waterSensorOk = true;
+  bool audioOnline = false;
 
   @override
   void initState() {
     super.initState();
     _subscription = FirebaseDatabase.instance.ref('hive_status').onValue.listen(
       (event) {
-        final data = _asMap(event.snapshot.value);
+        final data = asMap(event.snapshot.value);
         if (!mounted) return;
 
         setState(() {
-          temperature = _readDouble(data['temperature']);
-          humidity = _readDouble(data['humidity']);
-          honeyWeight = _readDouble(data['weight']);
-          waterLevel = _readDouble(data['water_level']);
-          soundResult = data['sound_result']?.toString() ?? 'Unknown';
-          lastSync = data['last_sync']?.toString() ?? 'No sync yet';
+          temperature = readDouble(data['temperature']);
+          humidity = readDouble(data['humidity']);
+          hiveWeight = readDouble(data['weight']);
+          waterLevel = readDouble(data['water_level']);
+          waterMl = readDouble(data['water_remaining_ml']);
+          soundResult = readString(data['sound_result'], 'Unknown');
+          soundConfidence = readInt(data['sound_confidence']);
+          lastSync = readString(data['last_sync'], 'No sync yet');
+          lastSyncEpoch = readInt(data['last_sync_epoch']);
+          // Absent on older firmware; assume healthy rather than showing a
+          // false fault on a hive that has not been reflashed yet.
+          waterSensorOk = data['water_sensor_ok'] != false;
+          audioOnline = readBool(data['audio_node_online']);
           _loading = false;
         });
       },
     );
+
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _subscription?.cancel();
+    _tick?.cancel();
     super.dispose();
   }
 
@@ -61,41 +80,62 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
       );
     }
 
+    // "Unknown" means the audio board has not reported yet. Flagging that as a
+    // warning would put a permanent orange badge on a healthy hive, so it is
+    // shown as a distinct "waiting" state instead.
+    final soundKnown =
+        soundResult.isNotEmpty && soundResult.toLowerCase() != 'unknown';
+
     final sensors = [
       _SensorItem(
         name: 'Temperature',
-        value: '${temperature.toStringAsFixed(1)} C',
+        value: audioOnline || temperature > 0
+            ? '${temperature.toStringAsFixed(1)} C'
+            : 'Waiting',
         icon: Icons.thermostat_rounded,
         color: const Color(0xFFE53935),
-        warning: temperature > 36,
+        warning: temperature > 36 || (temperature > 0 && temperature < 32),
+        subtitle: audioOnline ? null : 'Audio/DHT board offline',
       ),
       _SensorItem(
         name: 'Humidity',
-        value: '${humidity.toStringAsFixed(0)}%',
+        value: audioOnline || humidity > 0
+            ? '${humidity.toStringAsFixed(0)}%'
+            : 'Waiting',
         icon: Icons.water_drop_rounded,
         color: const Color(0xFF42A5F5),
-        warning: humidity > 75 || humidity < 40,
+        warning: humidity > 75 || (humidity > 0 && humidity < 40),
+        subtitle: audioOnline ? null : 'Audio/DHT board offline',
       ),
       _SensorItem(
-        name: 'Collected Honey',
-        value: '${honeyWeight.toStringAsFixed(1)} kg',
+        name: 'Hive Weight',
+        value: '${hiveWeight.toStringAsFixed(1)} kg',
         icon: Icons.scale_rounded,
         color: const Color(0xFF8D6E63),
         warning: false,
+        subtitle: 'Whole hive on the load cell',
       ),
       _SensorItem(
-        name: 'Sound',
-        value: soundResult,
+        name: 'Sound Analysis',
+        value: soundKnown ? soundResult : 'Waiting for analysis',
         icon: Icons.graphic_eq_rounded,
         color: AppColors.secondary,
-        warning: soundResult.toLowerCase() != 'normal',
+        warning: soundKnown && soundResult.toLowerCase() != 'normal',
+        subtitle: soundKnown && soundConfidence > 0
+            ? '$soundConfidence% confidence'
+            : 'Runs every 15 minutes',
       ),
       _SensorItem(
-        name: 'Water Level',
-        value: '${waterLevel.toStringAsFixed(0)}%',
-        icon: Icons.water_rounded,
+        name: 'Feeding Level',
+        value: waterSensorOk
+            ? '${waterLevel.toStringAsFixed(0)}%'
+            : 'Sensor fault',
+        icon: Icons.local_drink_rounded,
         color: const Color(0xFF42A5F5),
-        warning: waterLevel < 30,
+        warning: !waterSensorOk || waterLevel < 20,
+        subtitle: waterSensorOk && waterMl > 0
+            ? '${waterMl.toStringAsFixed(0)} ml remaining'
+            : (waterSensorOk ? null : 'Ultrasonic not responding'),
       ),
     ];
 
@@ -113,7 +153,7 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           children: [
-            const _LiveStatusRow(),
+            _LiveStatusRow(lastSyncEpoch: lastSyncEpoch),
             const SizedBox(height: 18),
             ...sensors.map(
               (sensor) => Padding(
@@ -122,36 +162,52 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
               ),
             ),
             const SizedBox(height: 6),
-            _ConnectionStatusCard(lastSync: lastSync),
+            _ConnectionStatusCard(
+              lastSync: lastSync,
+              lastSyncEpoch: lastSyncEpoch,
+              audioOnline: audioOnline,
+            ),
           ],
         ),
       ),
     );
   }
-
-  Map<dynamic, dynamic> _asMap(Object? value) {
-    if (value is Map) return value;
-    return {};
-  }
-
-  double _readDouble(Object? value) {
-    if (value is num) return value.toDouble();
-    return double.tryParse(value?.toString() ?? '') ?? 0;
-  }
 }
 
 class _LiveStatusRow extends StatelessWidget {
-  const _LiveStatusRow();
+  const _LiveStatusRow({required this.lastSyncEpoch});
+
+  final int lastSyncEpoch;
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
+    // This row used to read "Live - just now" as a hard-coded string, so it
+    // said the same thing whether the hive had reported a second ago or gone
+    // offline days earlier. The controller uploads every 30 s, so anything
+    // past ~2 minutes means the link is down.
+    final stale =
+        lastSyncEpoch <= 0 ||
+        DateTime.now()
+                .difference(
+                  DateTime.fromMillisecondsSinceEpoch(lastSyncEpoch * 1000),
+                )
+                .inSeconds >
+            120;
+
+    return Row(
       children: [
-        _StatusDot(color: AppColors.secondary, size: 9),
-        SizedBox(width: 8),
+        _StatusDot(
+          color: stale ? const Color(0xFFFF6F00) : AppColors.secondary,
+          size: 9,
+        ),
+        const SizedBox(width: 8),
         Text(
-          'Live - just now',
-          style: TextStyle(
+          lastSyncEpoch <= 0
+              ? 'Waiting for the hive'
+              : (stale
+                    ? 'Last update ${timeAgo(lastSyncEpoch)}'
+                    : 'Live - ${timeAgo(lastSyncEpoch)}'),
+          style: const TextStyle(
             color: AppColors.textSecondary,
             fontSize: 13,
             fontWeight: FontWeight.w600,
@@ -214,6 +270,18 @@ class _SensorCard extends StatelessWidget {
                           fontWeight: FontWeight.w900,
                         ),
                       ),
+                      if (sensor.subtitle != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          sensor.subtitle!,
+                          maxLines: 2,
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -267,12 +335,31 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _ConnectionStatusCard extends StatelessWidget {
-  const _ConnectionStatusCard({required this.lastSync});
+  const _ConnectionStatusCard({
+    required this.lastSync,
+    required this.lastSyncEpoch,
+    required this.audioOnline,
+  });
 
   final String lastSync;
+  final int lastSyncEpoch;
+  final bool audioOnline;
 
   @override
   Widget build(BuildContext context) {
+    // Previously this card always said "ESP32 Connected / Signal Strong",
+    // regardless of state. It now reports the two boards separately, because
+    // they fail independently: the controller can be online and publishing
+    // while the audio board is dead, and the temperature would simply freeze.
+    final controllerOnline =
+        lastSyncEpoch > 0 &&
+        DateTime.now()
+                .difference(
+                  DateTime.fromMillisecondsSinceEpoch(lastSyncEpoch * 1000),
+                )
+                .inSeconds <=
+            120;
+
     return BeeGuardCard(
       padding: EdgeInsets.zero,
       child: Container(
@@ -284,50 +371,94 @@ class _ConnectionStatusCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               children: [
-                Icon(Icons.wifi_rounded, color: Color(0xFFFFC928), size: 28),
-                SizedBox(width: 12),
+                Icon(
+                  controllerOnline
+                      ? Icons.wifi_rounded
+                      : Icons.wifi_off_rounded,
+                  color: const Color(0xFFFFC928),
+                  size: 28,
+                ),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'ESP32 Connected',
-                    style: TextStyle(
+                    controllerOnline
+                        ? 'Hive controller connected'
+                        : 'Hive controller not reporting',
+                    style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
+                      fontSize: 17,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                const _StatusDot(color: AppColors.secondary, size: 10),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    'Signal Strong',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                Text(
-                  'Last sync: $lastSync',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.72),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+            const SizedBox(height: 16),
+            _NodeRow(
+              label: 'Main controller',
+              online: controllerOnline,
+            ),
+            const SizedBox(height: 10),
+            _NodeRow(
+              label: 'Audio / DHT board',
+              online: audioOnline,
+            ),
+            const SizedBox(height: 14),
+            Text(
+              lastSyncEpoch > 0
+                  ? 'Last sync: ${timeAgo(lastSyncEpoch)}  ($lastSync)'
+                  : 'Last sync: $lastSync',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.72),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _NodeRow extends StatelessWidget {
+  const _NodeRow({required this.label, required this.online});
+
+  final String label;
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _StatusDot(
+          color: online ? AppColors.secondary : const Color(0xFFFF6F00),
+          size: 10,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        Text(
+          online ? 'Online' : 'Offline',
+          style: TextStyle(
+            color: online
+                ? AppColors.secondary
+                : const Color(0xFFFF6F00),
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -355,6 +486,7 @@ class _SensorItem {
     required this.icon,
     required this.color,
     required this.warning,
+    this.subtitle,
   });
 
   final String name;
@@ -362,4 +494,8 @@ class _SensorItem {
   final IconData icon;
   final Color color;
   final bool warning;
+
+  /// Extra line under the value: units, confidence, or why a reading is
+  /// missing. Without it a stale number looks exactly like a live one.
+  final String? subtitle;
 }

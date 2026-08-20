@@ -1,100 +1,105 @@
 {
+  "_comment": "BeeGuard Realtime Database skeleton. Import into the Firebase console to create the node structure. Sensor fields start empty on purpose: seeding plausible readings makes a disconnected hive look like a healthy one. The ESP32 main controller fills them in and owns everything except the app-written keys under /commands.",
+
   "hive_status": {
-    "temperature": 34.2,
-    "humidity": 61.8,
-    "weight": 24.3,
-    "water_level": 70,
-    "water_height_cm": 2.4,
-    "sound_result": "Normal",
-    "sound_confidence": 94,
-    "health_score": 87,
+    "temperature": 0,
+    "humidity": 0,
+    "weight": 0,
+    "water_level": 0,
+    "water_height_cm": 0,
+    "water_remaining_ml": 0,
+    "water_sensor_ok": true,
+    "sound_result": "Unknown",
+    "sound_confidence": 0,
+    "health_score": 0,
     "door_open": false,
-    "last_sync": "13:00:00"
+    "locked": true,
+    "entrance_status": "open",
+    "audio_node_online": false,
+    "camera_node_online": false,
+    "last_sync": "Waiting for hive",
+    "last_sync_epoch": 0
   },
+
   "ai_status": {
-    "sound_result": "Normal",
-    "confidence": 94,
-    "last_analysis": "Today at 13:00",
-    "model_version": "TinyML v1.0"
+    "sound_result": "Unknown",
+    "confidence": 0,
+    "last_analysis": "No analysis yet",
+    "model_version": "Edge Impulse v1.0",
+    "node_online": false
   },
-  "ai_history": {
-    "h1": { "time": "13:00", "result": "Normal", "confidence": 94 },
-    "h2": { "time": "12:30", "result": "Normal", "confidence": 91 },
-    "h3": { "time": "12:15", "result": "Swarming", "confidence": 78 }
-  },
+
+  "ai_history": {},
+
   "commands": {
     "collect_honey": false,
     "smoke_pump": false,
     "pump": false,
     "feed_ml": 0,
-    "entrance": "open"
+    "entrance": "open",
+    "tare_scale": false,
+    "set_baseline": false
   },
+
   "security": {
     "locked": true,
     "rfid_status": "Waiting for Card",
     "last_card": "",
     "last_time": ""
   },
+
   "hornet_detection": {
     "detected": false,
     "entrance_status": "open",
     "last_detection": "No detection yet",
+    "last_detection_epoch": 0,
+    "last_confirmed": false,
+    "detection_count": 0,
+    "camera_online": false,
     "image_url": ""
   },
-  "production": {
-    "today_weight": 24.3,
-    "yesterday_weight": 23.8,
-    "estimated_honey": 0.5,
-    "today_production": 0.5,
-    "weekly_production": 3.5,
-    "monthly_production": 15.0
+
+  "camera": {
+    "stream_url": "http://192.168.137.150:81/stream",
+    "status_url": "http://192.168.137.150/status",
+    "online": false,
+    "last_seen": ""
   },
+
+  "production": {
+    "hive_weight": 0,
+    "baseline_weight": 0,
+    "estimated_honey": 0,
+    "today_production": 0,
+    "today_start_weight": 0,
+    "today_date": "",
+    "yesterday_production": 0,
+    "weekly_production": 0,
+    "monthly_production": 0,
+    "total_harvested": 0,
+    "last_harvest_kg": 0,
+    "last_harvest_time": "",
+    "history": {}
+  },
+
+  "calibration": {
+    "scale_factor": -7050.0,
+    "tare_offset": 0,
+    "container_height_cm": 3.5,
+    "sensor_to_top_cm": 4.0,
+    "container_diameter_cm": 9.0,
+    "honey_fraction": 0.85
+  },
+
   "settings": {
     "temp_max": 36,
     "temp_min": 32,
-    "humidity_max": 70,
+    "humidity_max": 75,
+    "humidity_min": 40,
     "notifications_enabled": true
   },
-  "alerts": {
-    "alert1": {
-      "type": "temperature",
-      "message": "Hive temp reached 37.5°C",
-      "timestamp": "5 min ago",
-      "read": false
-    },
-    "alert2": {
-      "type": "sound",
-      "message": "Unusual bee sound pattern detected",
-      "timestamp": "1h ago",
-      "read": true
-    },
-    "alert3": {
-      "type": "water",
-      "message": "Feeding level is below 30%, refill soon",
-      "timestamp": "3h ago",
-      "read": true
-    }
-  },
-  "rfid_logs": {
-    "log1": {
-      "card_id": "A1 F3 00 00",
-      "access": "granted",
-      "timestamp": "Today 11:30 AM"
-    },
-    "log2": {
-      "card_id": "A1 F3 00 00",
-      "access": "granted",
-      "timestamp": "Today 09:15 AM"
-    },
-    "log3": {
-      "card_id": "B2 C4 11 22",
-      "access": "granted",
-      "timestamp": "Today 08:50 AM"
-    },
-    "log4": {
-      "card_id": "A1 F3 00 00",
-      "access": "granted",
-      "timestamp": "Yesterday 06:00 PM"
-    }
-  }
+
+  "alerts": {},
+
+  "rfid_logs": {}
 }

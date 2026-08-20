@@ -4,6 +4,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../utils/db_read.dart';
 import '../widgets/beeguard_card.dart';
 import '../widgets/section_header.dart';
 
@@ -25,19 +26,32 @@ class _SecurityScreenState extends State<SecurityScreen> {
   @override
   void initState() {
     super.initState();
+    // Only the last five rows are displayed, so fetch only what is shown.
+    // /rfid_logs grows by one node per card scan and is never pruned; reading
+    // the whole node meant re-downloading every scan ever made on each update.
     _logsSubscription = FirebaseDatabase.instance
         .ref('rfid_logs')
+        .limitToLast(5)
         .onValue
         .listen((event) {
           final data = _asMap(event.snapshot.value);
           final nextLogs = data.entries.map((entry) {
             final row = _asMap(entry.value);
+            // The firmware writes a single "timestamp" ("2026-08-20 14:33:10")
+            // plus an "epoch". There is no separate "date" field, so the old
+            // code fell back to the literal word "Today" on every row —
+            // including entries from last week.
+            final epoch = row['epoch'] is num
+                ? (row['epoch'] as num).toInt()
+                : 0;
             return _RfidLog(
-              date: row['date']?.toString() ?? 'Today',
-              time:
-                  row['time']?.toString() ??
-                  row['timestamp']?.toString() ??
-                  'Unknown time',
+              when: epoch > 0
+                  ? timeAgo(epoch)
+                  : (row['timestamp']?.toString() ??
+                        row['time']?.toString() ??
+                        'Unknown time'),
+              stamp: row['timestamp']?.toString() ?? '',
+              action: row['action']?.toString() ?? '',
               status: row['access']?.toString() ?? 'denied',
               cardId: row['card_id']?.toString() ?? 'Unknown',
             );
@@ -248,7 +262,7 @@ class _AccessRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${log.date}  ${log.time}',
+                  log.stamp.isEmpty ? log.when : '${log.when}  -  ${log.stamp}',
                   style: const TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
@@ -258,9 +272,27 @@ class _AccessRow extends StatelessWidget {
               ],
             ),
           ),
-          Text(
-            granted ? 'Granted' : 'Denied',
-            style: TextStyle(color: color, fontWeight: FontWeight.w900),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                granted ? 'Granted' : 'Denied',
+                style: TextStyle(color: color, fontWeight: FontWeight.w900),
+              ),
+              if (log.action.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  // Any card toggles the lock, so which way it went is the
+                  // part the beekeeper actually needs from the log.
+                  log.action == 'locked' ? 'Locked' : 'Unlocked',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
           ),
         ],
       ),
@@ -270,14 +302,22 @@ class _AccessRow extends StatelessWidget {
 
 class _RfidLog {
   const _RfidLog({
-    required this.date,
-    required this.time,
+    required this.when,
+    required this.stamp,
+    required this.action,
     required this.status,
     required this.cardId,
   });
 
-  final String date;
-  final String time;
+  /// Elapsed time, e.g. "5 min ago".
+  final String when;
+
+  /// Absolute stamp from the firmware, e.g. "2026-08-20 14:33:10".
+  final String stamp;
+
+  /// "locked" or "unlocked" — which way this scan moved the lock.
+  final String action;
+
   final String status;
   final String cardId;
 }

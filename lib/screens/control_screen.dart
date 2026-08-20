@@ -20,6 +20,8 @@ class _ControlScreenState extends State<ControlScreen> {
   bool pumpRunning = false;
   double feedingLevel = 0;
   double waterHeight = 0;
+  double remainingMl = 0;
+  bool sensorOk = true;
   bool _loading = true;
   bool _feeding = false;
   int _feedingMl = 0;
@@ -49,6 +51,10 @@ class _ControlScreenState extends State<ControlScreen> {
             waterHeight = _readDouble(
               data['water_height_cm'] ?? data['water_height'],
             );
+            remainingMl = _readDouble(data['water_remaining_ml']);
+            // Absent on firmware that predates the sensor-fault flag; treat
+            // that as healthy rather than showing a fault that isn't there.
+            sensorOk = data['water_sensor_ok'] != false;
             _loading = false;
           });
         });
@@ -159,18 +165,45 @@ class _ControlScreenState extends State<ControlScreen> {
                     ),
                   ),
                   const SizedBox(height: 22),
+                  // Volume is what actually decides whether another dose fits;
+                  // a percentage of a 3.5 cm tank does not tell you if there
+                  // is enough left for a 100 ml feed.
                   Text(
-                    'Remaining Water Height: ${waterHeight.toStringAsFixed(1)} cm',
+                    remainingMl > 0
+                        ? '${remainingMl.toStringAsFixed(0)} ml remaining'
+                        : 'Remaining height: ${waterHeight.toStringAsFixed(1)} cm',
                     style: const TextStyle(
                       color: AppColors.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
+                  if (remainingMl > 0) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      'Depth ${waterHeight.toStringAsFixed(1)} cm',
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 16),
+            if (!sensorOk) ...[
+              const _LevelNotice(
+                icon: Icons.sensors_off_rounded,
+                title: 'Level sensor not responding',
+                message:
+                    'The ultrasonic sensor stopped answering, so the level '
+                    'shown is the last good reading. Check its wiring.',
+                color: Color(0xFFE53935),
+              ),
+              const SizedBox(height: 16),
+            ],
             _StatusCard(
               icon: Icons.water_rounded,
               title: 'Pump Status',

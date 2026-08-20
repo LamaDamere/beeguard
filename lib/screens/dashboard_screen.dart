@@ -18,12 +18,14 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<DatabaseEvent>? _hiveSubscription;
   StreamSubscription<DatabaseEvent>? _commandsSubscription;
+  StreamSubscription<DatabaseEvent>? _alertsSubscription;
 
   double temperature = 0;
   double humidity = 0;
   double feedingLevel = 0;
   int healthScore = 0;
   bool hiveLocked = true;
+  int unreadAlerts = 0;
   bool _loading = true;
 
   @override
@@ -53,12 +55,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
             hiveLocked = data['locked'] == true;
           });
         });
+
+    // Unread count for the bell badge. Limited to the recent window so the
+    // dashboard never downloads a whole season of events just to draw a number.
+    _alertsSubscription = FirebaseDatabase.instance
+        .ref('alerts')
+        .limitToLast(50)
+        .onValue
+        .listen((event) {
+          final data = _asMap(event.snapshot.value);
+          var unread = 0;
+          for (final entry in data.entries) {
+            if (_asMap(entry.value)['read'] != true) unread++;
+          }
+          if (!mounted) return;
+          setState(() => unreadAlerts = unread);
+        });
   }
 
   @override
   void dispose() {
     _hiveSubscription?.cancel();
     _commandsSubscription?.cancel();
+    _alertsSubscription?.cancel();
     super.dispose();
   }
 
@@ -113,7 +132,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             tooltip: 'Notifications',
             onPressed: () =>
                 Navigator.pushNamed(context, AppRoutes.notifications),
-            icon: const Icon(Icons.notifications_none_rounded),
+            icon: Badge.count(
+              count: unreadAlerts,
+              isLabelVisible: unreadAlerts > 0,
+              backgroundColor: const Color(0xFFE53935),
+              child: Icon(
+                unreadAlerts > 0
+                    ? Icons.notifications_active_rounded
+                    : Icons.notifications_none_rounded,
+              ),
+            ),
           ),
           IconButton(
             tooltip: 'Profile',
