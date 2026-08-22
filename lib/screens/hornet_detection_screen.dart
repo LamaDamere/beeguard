@@ -18,7 +18,7 @@ class HornetDetectionScreen extends StatefulWidget {
 class _HornetDetectionScreenState extends State<HornetDetectionScreen> {
   /// Used until the controller publishes /camera/stream_url. Keeping the URL
   /// in the database means the camera can move without rebuilding the app.
-  static const String _fallbackStreamUrl = 'http://192.168.137.150:81/stream';
+  static const String _fallbackStreamUrl = 'http://192.168.137.150/';
 
   StreamSubscription<DatabaseEvent>? _hornetSubscription;
   StreamSubscription<DatabaseEvent>? _cameraSubscription;

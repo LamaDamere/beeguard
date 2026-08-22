@@ -65,7 +65,11 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
           final data = asMap(event.snapshot.value);
           if (!mounted) return;
           setState(() {
-            baselineWeight = readDouble(data['baseline_weight']);
+            // Default to ~4 kg (empty box) when no baseline is set, so the
+            // estimate shows a number rather than a dash. Set Baseline can
+            // still record a real, measured value later.
+            final rawBaseline = readDouble(data['baseline_weight']);
+            baselineWeight = rawBaseline > 0 ? rawBaseline : 4.0;
             todayProduction = readDouble(data['today_production']);
             lastHarvestKg = readDouble(data['last_harvest_kg']);
             lastHarvestTime = readString(data['last_harvest_time'], '');
@@ -285,7 +289,13 @@ class _HiveDetailsScreenState extends State<HiveDetailsScreen> {
             // is now the estimate of what is actually harvestable, with the
             // raw scale reading kept underneath as supporting detail.
             _HoneyEstimateCard(
-              estimatedHoney: estimatedHoney,
+              // Prefer the ESP's figure; fall back to weight above baseline so
+              // the card is never blank before the controller writes one.
+              estimatedHoney: estimatedHoney > 0
+                  ? estimatedHoney
+                  : (hiveWeight > baselineWeight
+                        ? (hiveWeight - baselineWeight) * 0.85
+                        : 0),
               hiveWeight: hiveWeight,
               baselineWeight: baselineWeight,
               todayProduction: todayProduction,

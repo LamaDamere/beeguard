@@ -38,6 +38,11 @@ uint8_t ESP32_MAIN_MAC[] = {
   0xEC, 0xE3, 0x34, 0x45, 0xC6, 0x94
 };
 
+// عنوان البث. منبعت للـ FF:FF:FF:FF:FF:FF بدل الاعتماد على MAC محدد: هيك حتى
+// لو الـ MAC فوق غلط، الباكت بتوصل للمتحكم — لأن استقبال ESP-NOW ما بيصفّي
+// حسب المرسل. هاد أكثر سبب شائع لـ "السيرفو ما بتتحرك رغم إنه الكشف شغال".
+uint8_t BROADCAST_MAC[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
 // =====================================================
 // AI THINKER ESP32-CAM PINS
 // =====================================================
@@ -234,7 +239,7 @@ void sendHornetStatus(bool detected) {
   pkt.secondsSinceLast = secondsSinceLastDetection();
 
   esp_err_t result = esp_now_send(
-    ESP32_MAIN_MAC,
+    BROADCAST_MAC,
     (uint8_t*)&pkt,
     sizeof(pkt)
   );
@@ -867,7 +872,7 @@ document
   .src =
   "http://" +
   host +
-  ":81/stream";
+  "/";
 
 function agoText(sec) {
 
@@ -1265,111 +1270,65 @@ static esp_err_t stream_handler(
 // START WEB SERVERS
 // =====================================================
 
+// callback تأكيد التسليم: بيطبع على السيريال إذا الباكت وصلت للطرف الثاني.
+// FAIL هون يعني القناة غلط أو المتحكم مش شغّال — مش مشكلة كود.
+void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) {
+  Serial.print("[ESP-NOW] delivery ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL (no ACK)");
+}
+
 void startCameraServer() {
 
-  httpd_config_t config =
-    HTTPD_DEFAULT_CONFIG();
+  // ── بورت 80: الستريم المباشر على الجذر "/" ──────────────────────────
+  // معالج الستريم بيدخل حلقة لا نهائية لكل متصل، ومخدم esp_http_server خيط
+  // واحد، فأي معالج تاني على نفس المخدم بينحبس. لهيك بنخصص بورت 80 كامل
+  // للستريم — هيك http://<ip>/ بيعطي الفيديو مباشرة (هذا اللي طلبه المستخدم).
+  httpd_config_t streamConfig = HTTPD_DEFAULT_CONFIG();
+  streamConfig.server_port      = 80;
+  streamConfig.ctrl_port        = 32080;
+  streamConfig.stack_size       = 10240;
+  streamConfig.lru_purge_enable = true;
+  streamConfig.max_open_sockets = 4;
 
-  config.server_port = 80;
-  config.stack_size = 10240;   // FIX: was default 4096 -> too small, caused stack canary crash
-  config.lru_purge_enable = true;   // FIX: recycle oldest socket instead of rejecting new connections (error 113)
+  httpd_uri_t streamUri = {};
+  streamUri.uri     = "/";
+  streamUri.method  = HTTP_GET;
+  streamUri.handler = stream_handler;
+
+  if (httpd_start(&stream_httpd, &streamConfig) == ESP_OK) {
+    httpd_register_uri_handler(stream_httpd, &streamUri);
+    Serial.println("Stream server started (port 80, root)");
+  }
+
+  // ── بورت 81: ردود قصيرة (لوحة HTML + /status + /count) ───────────────
+  // ردود سريعة ما بتحبس، فبتشتغل كلها على مخدم واحد بدون ما تعطل الستريم.
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+  config.server_port      = 81;
+  config.ctrl_port        = 32081;
+  config.stack_size       = 10240;
+  config.lru_purge_enable = true;
   config.max_open_sockets = 7;
 
   httpd_uri_t indexUri = {};
-
-  indexUri.uri = "/";
-
-  indexUri.method =
-    HTTP_GET;
-
-  indexUri.handler =
-    index_handler;
+  indexUri.uri     = "/";
+  indexUri.method  = HTTP_GET;
+  indexUri.handler = index_handler;
 
   httpd_uri_t countUri = {};
-
-  countUri.uri =
-    "/count";
-
-  countUri.method =
-    HTTP_GET;
-
-  countUri.handler =
-    count_handler;
+  countUri.uri     = "/count";
+  countUri.method  = HTTP_GET;
+  countUri.handler = count_handler;
 
   httpd_uri_t statusUri = {};
+  statusUri.uri     = "/status";
+  statusUri.method  = HTTP_GET;
+  statusUri.handler = status_handler;
 
-  statusUri.uri =
-    "/status";
-
-  statusUri.method =
-    HTTP_GET;
-
-  statusUri.handler =
-    status_handler;
-
-  if (
-    httpd_start(
-      &camera_httpd,
-      &config
-    ) == ESP_OK
-  ) {
-
-    httpd_register_uri_handler(
-      camera_httpd,
-      &indexUri
-    );
-
-    httpd_register_uri_handler(
-      camera_httpd,
-      &countUri
-    );
-
-    httpd_register_uri_handler(
-      camera_httpd,
-      &statusUri
-    );
-
-    Serial.println(
-      "Main server started"
-    );
-  }
-
-  httpd_config_t streamConfig =
-    HTTPD_DEFAULT_CONFIG();
-
-  streamConfig.server_port = 81;
-  streamConfig.stack_size = 10240;   // FIX: this is the task that runs frame2jpg + detection, needs a bigger stack
-  streamConfig.lru_purge_enable = true;
-
-  streamConfig.ctrl_port =
-    config.ctrl_port + 1;
-
-  httpd_uri_t streamUri = {};
-
-  streamUri.uri =
-    "/stream";
-
-  streamUri.method =
-    HTTP_GET;
-
-  streamUri.handler =
-    stream_handler;
-
-  if (
-    httpd_start(
-      &stream_httpd,
-      &streamConfig
-    ) == ESP_OK
-  ) {
-
-    httpd_register_uri_handler(
-      stream_httpd,
-      &streamUri
-    );
-
-    Serial.println(
-      "Stream server started"
-    );
+  if (httpd_start(&camera_httpd, &config) == ESP_OK) {
+    httpd_register_uri_handler(camera_httpd, &indexUri);
+    httpd_register_uri_handler(camera_httpd, &countUri);
+    httpd_register_uri_handler(camera_httpd, &statusUri);
+    Serial.println("Info server started (port 81)");
   }
 }
 
@@ -1464,28 +1423,20 @@ void setup() {
     return;
   }
 
+  esp_now_register_send_cb(onEspNowSent);
+
+  // منسجّل الاثنين: المتحكم (unicast) وعنوان البث. الإرسال الفعلي بيروح بث
+  // عشان يوصل بغض النظر عن صحة الـ MAC. channel = 0 يعني نفس قناة الواي فاي.
   esp_now_peer_info_t peerInfo = {};
-
-  memcpy(
-    peerInfo.peer_addr,
-    ESP32_MAIN_MAC,
-    6
-  );
-
   peerInfo.channel = 0;
-
   peerInfo.encrypt = false;
 
-  if (
-    esp_now_add_peer(
-      &peerInfo
-    ) != ESP_OK
-  ) {
+  memcpy(peerInfo.peer_addr, ESP32_MAIN_MAC, 6);
+  esp_now_add_peer(&peerInfo);   // ما منوقف لو فشل — البث بيكفي
 
-    Serial.println(
-      "[ESP-NOW] Failed to add ESP32 #1"
-    );
-
+  memcpy(peerInfo.peer_addr, BROADCAST_MAC, 6);
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("[ESP-NOW] Failed to add broadcast peer");
     return;
   }
 
@@ -1509,25 +1460,13 @@ void setup() {
 
   Serial.println();
 
-  Serial.print(
-    "Open this address: http://"
-  );
+  Serial.print("Dashboard: http://");
+  Serial.print(WiFi.localIP());
+  Serial.println(":81/");
 
-  Serial.println(
-    WiFi.localIP()
-  );
-
-  Serial.print(
-    "Direct stream: http://"
-  );
-
-  Serial.print(
-    WiFi.localIP()
-  );
-
-  Serial.println(
-    ":81/stream"
-  );
+  Serial.print("Live stream: http://");
+  Serial.print(WiFi.localIP());
+  Serial.println("/");
 }
 
 // =====================================================

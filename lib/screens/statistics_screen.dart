@@ -49,7 +49,17 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
           final data = asMap(event.snapshot.value);
           if (!mounted) return;
           setState(() {
-            estimatedHoney = readDouble(data['estimated_honey']);
+            // Fall back to weight above a ~4 kg baseline so the headline is
+            // never a bare 0 before the controller writes estimated_honey.
+            final espEstimate = readDouble(data['estimated_honey']);
+            final baseline = readDouble(data['baseline_weight']) > 0
+                ? readDouble(data['baseline_weight'])
+                : 4.0;
+            estimatedHoney = espEstimate > 0
+                ? espEstimate
+                : (currentHoneyWeight > baseline
+                      ? (currentHoneyWeight - baseline) * 0.85
+                      : 0);
             todayProduction = readDouble(data['today_production']);
             weeklyProduction = readDouble(data['weekly_production']);
             monthlyProduction = readDouble(data['monthly_production']);

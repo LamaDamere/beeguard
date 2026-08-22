@@ -72,8 +72,8 @@
 #define DATABASE_URL "https://beeguard-smartbee-default-rtdb.europe-west1.firebasedatabase.app"
 
 // ─── Camera node (for the app's live view) ────────────────
-#define CAMERA_STREAM_URL   "http://192.168.137.150:81/stream"
-#define CAMERA_STATUS_URL   "http://192.168.137.150/status"
+#define CAMERA_STREAM_URL   "http://192.168.137.150/"
+#define CAMERA_STATUS_URL   "http://192.168.137.150:81/status"
 
 // ─── Time ─────────────────────────────────────────────────
 #define NTP_SERVER_1    "pool.ntp.org"
@@ -149,7 +149,7 @@ long  tareOffset  = 0;
 // or lower it in /calibration/honey_fraction once real harvests are weighed.
 float honeyFraction   = 0.85;
 float harvestDropKg   = 0.50;   // weight drop that counts as a harvest
-float baselineWeight  = 0.0;    // hive weight with no harvestable stores
+float baselineWeight  = 4.0;    // approx empty-box weight so the honey estimate is never blank; re-measure via Set Baseline
 
 // ═══════════════════════════════════════════════════════════
 // ESP-NOW WIRE FORMAT — keep byte-identical on every board
@@ -1293,7 +1293,8 @@ void loadCalibration() {
     if (v > 0 && v <= 1.0) honeyFraction = v;
   }
   if (Firebase.RTDB.getFloat(&fbdo, "/production/baseline_weight")) {
-    baselineWeight = fbdo.floatData();
+    float v = fbdo.floatData();
+    if (v > 0) baselineWeight = v;   // a legacy 0 must not overwrite the 4kg default
   }
   if (Firebase.RTDB.getFloat(&fbdo, "/production/total_harvested")) {
     totalHarvested = fbdo.floatData();
@@ -1365,7 +1366,7 @@ void setup() {
   Serial.println("[RFID] Ready");
 
   // WiFi
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_STA);   // STA only — no SoftAP is used, and STA is the stable mode for ESP-NOW + station
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("[WiFi] Connecting");
   while (WiFi.status() != WL_CONNECTED) {
@@ -1438,6 +1439,9 @@ void setup() {
   cal.set("container_diameter_cm", containerDiameterCm);
   cal.set("honey_fraction",       honeyFraction);
   Firebase.RTDB.updateNode(&fbdo, "/calibration", &cal);
+
+  // Publish the baseline so estimated_honey is never blank in the app.
+  Firebase.RTDB.setFloat(&fbdo, "/production/baseline_weight", baselineWeight);
 
   Firebase.RTDB.setBool(&fbdo, "/hive_status/door_open", false);
   publishEntrance();

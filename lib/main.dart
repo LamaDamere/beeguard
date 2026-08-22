@@ -114,14 +114,14 @@ Future<void> _seedInitialData() async {
       // Where the app finds the ESP32-CAM. The controller republishes this at
       // boot, so changing the camera's address does not need an app rebuild.
       'camera': {
-        'stream_url': 'http://192.168.137.150:81/stream',
-        'status_url': 'http://192.168.137.150/status',
+        'stream_url': 'http://192.168.137.150/',
+        'status_url': 'http://192.168.137.150:81/status',
         'online': false,
         'last_seen': '',
       },
       'production': {
         'hive_weight': 0,
-        'baseline_weight': 0,
+        'baseline_weight': 4.0,
         'estimated_honey': 0,
         'today_production': 0,
         'today_start_weight': 0,
